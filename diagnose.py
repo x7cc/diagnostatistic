@@ -2,7 +2,6 @@
 """
 !!!!-ONLY WORKS WITH WINDOWS MACHINES-!!!!
 
-Optimized Diagnostic Collector — stdlib only (no pip dependencies)
 Collects system information to help diagnose issues and uploads
 the data to a Discord webhook in chunks.
 Then rebuild the information back into a whole using another script.
