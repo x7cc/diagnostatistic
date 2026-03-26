@@ -3,7 +3,8 @@
 A lightweight Windows diagnostic tool that collects system information and log files, packages them into a zip archive, splits it into chunks, and uploads everything to a Discord webhook. A companion rebuild script reassembles the archive on the receiving end.
 
 > **Windows only** — relies on Win32 APIs (`ctypes`) for memory and disk info.
-
+> 
+> **Features modificable** — many of the feature mentioned below can be modified in `diagnose.py` (see setup section)
 ---
 
 ## Features
@@ -11,8 +12,8 @@ A lightweight Windows diagnostic tool that collects system information and log f
 - **Zero dependencies** — pure Python stdlib, no `pip install` required
 - **Parallel collection** — all collectors run concurrently via `ThreadPoolExecutor`
 - **Smart file skipping** — ignores files over 10 MB and never re-includes previous diagnostic output
-- **Chunked Discord upload** — splits archives into 7 MB chunks to stay within Discord's 8 MB limit
-- **Automatic retry** — exponential back-off (up to 3 attempts) on failed uploads
+- **Chunked Discord upload** — splits archives into 7 MB chunks to stay within Discord's 8 MB limit (up to 25MB depending on server boosting level)
+- **Automatic retry** — retry (3 time) on failed uploads
 - **Auto-cleanup** — deletes local files after a successful upload (configurable)
 - **Manifest system** — generates a `manifest.json` so the rebuild script can reassemble chunks in the correct order
 - **Self-contained rebuild** — `rebuilds.py` automatically searches multiple locations for the manifest, no path typing required
@@ -24,7 +25,7 @@ A lightweight Windows diagnostic tool that collects system information and log f
 ```
 diagnose/
 ├── diagnose.py   # Main collector — runs on the target machine
-├── requirements.txt     # No external packages needed
+├── requirements.txt     # requirement for file
 └── rebuild/
     └── rebuilds.py      # Rebuild tool — runs on your machine after receiving chunks
 ```
@@ -42,7 +43,7 @@ diagnose/
 ## Setup
 
 1. Clone or download this repository.
-2. Open `github_diagnose.py` and set your webhook URL:
+2. Open `diagnose.py` and set your webhook URL:
 
 ```python
 WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
