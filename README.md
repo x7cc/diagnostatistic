@@ -129,6 +129,11 @@ The rebuilt zip will be saved in the same directory as the manifest.
 
 ---
 
+## AI Assistance
+AI tools (such as ChatGPT by OpenAI) were used to assist with debugging, optimizing code performance, and improving understanding of certain programming concepts. All final implementation decisions and code integration were performed by the project author.
+
+---
+
 ## Troubleshooting
 
 **403 Forbidden from Discord**
